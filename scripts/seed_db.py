@@ -1,6 +1,10 @@
 """Seed the database with an initial admin API key."""
 import asyncio
 import sys
+from pathlib import Path
+
+# Ensure project root is on sys.path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from hub.database import async_session, engine
 from hub.models import Base
