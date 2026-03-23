@@ -5,8 +5,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from hub.config import settings
-from hub.database import async_session
+from hub.database import async_session, engine
+from hub.models import Base
 from hub.routers import admin, agents, discovery, tasks, wellknown
+from hub.services.auth import create_api_key
 from hub.services.task_manager import expire_stale_tasks
 
 
@@ -25,6 +27,9 @@ async def task_expiry_loop():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Create tables on startup (idempotent)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
     # Start background task expiry
     expiry_task = asyncio.create_task(task_expiry_loop())
     yield
@@ -61,3 +66,21 @@ app.include_router(admin.router)
 @app.get("/health")
 async def health():
     return {"status": "ok", "hub": settings.hub_name}
+
+
+@app.post("/setup/seed")
+async def seed():
+    """One-time seed: create admin API key. Only works if no keys exist yet."""
+    async with async_session() as session:
+        from sqlalchemy import select, func
+        from hub.models.auth import APIKey
+        count = await session.execute(select(func.count(APIKey.id)))
+        if (count.scalar() or 0) > 0:
+            return {"error": "Database already seeded. Use /admin/keys to create more."}
+
+        api_key, full_key = await create_api_key(session, name="Admin", role="admin")
+        return {
+            "message": "Admin key created. Save it — shown only once.",
+            "key_id": str(api_key.id),
+            "api_key": full_key,
+        }
